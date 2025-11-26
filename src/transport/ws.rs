@@ -31,45 +31,107 @@ impl WebSocketChannelWrapper {
 }
 
 #[cfg(feature = "tokio-runtime")]
-pub(crate) async fn connect(host: &Host, port: Port) -> ZmqResult<(FramedIo, Endpoint)> {
+pub(crate) async fn connect(host: &Host, port: Port, use_tls: bool) -> ZmqResult<(FramedIo, Endpoint)> {
     use tokio::net::TcpStream;
     
-    let url = format!("ws://{}:{}", host, port);
-    let tcp_stream = TcpStream::connect((host.to_string().as_str(), port)).await?;
-    let (ws_stream, _) = async_tungstenite::tokio::client_async(&url, tcp_stream)
-        .await
-        .map_err(|_e| crate::ZmqError::Other("WebSocket connection failed"))?;
+    let protocol = if use_tls { "wss" } else { "ws" };
+    let url = format!("{}://{}:{}", protocol, host, port);
     
-    let peer_endpoint = Endpoint::Ws(host.clone(), port);
-    
-    // Create read and write halves that convert between WebSocket messages and raw bytes
-    let (mut write, mut read) = ws_stream.split();
+    let peer_endpoint = if use_tls {
+        Endpoint::Wss(host.clone(), port)
+    } else {
+        Endpoint::Ws(host.clone(), port)
+    };
     
     // Create async channels for communication
     let (tx_bytes, mut rx_bytes) = futures::channel::mpsc::unbounded::<Vec<u8>>();
     let (tx_ws, rx_ws) = futures::channel::mpsc::unbounded::<Vec<u8>>();
     
-    // Spawn task to read WebSocket messages and convert to bytes
-    async_rt::task::spawn(async move {
-        while let Some(msg_result) = read.next().await {
-            if let Ok(Message::Binary(data)) = msg_result {
-                if tx_ws.unbounded_send(data).is_err() {
+    if use_tls {
+        #[cfg(feature = "wss-transport")]
+        {
+            let tcp_stream = TcpStream::connect((host.to_string().as_str(), port)).await?;
+            let connector: tokio_native_tls::TlsConnector = 
+                tokio_native_tls::native_tls::TlsConnector::builder()
+                    .danger_accept_invalid_certs(true) // For self-signed certs - can be configurable
+                    .build()
+                    .map_err(|_e| crate::ZmqError::Other("TLS connector creation failed"))?
+                    .into();
+            
+            let domain = match host {
+                Host::Domain(d) => d.as_str(),
+                _ => "localhost",
+            };
+            
+            let tls_stream = connector
+                .connect(domain, tcp_stream)
+                .await
+                .map_err(|_e| crate::ZmqError::Other("TLS connection failed"))?;
+            
+            let (ws_stream, _) = async_tungstenite::tokio::client_async(&url, tls_stream)
+                .await
+                .map_err(|_e| crate::ZmqError::Other("WebSocket connection failed"))?;
+            
+            // Create read and write halves that convert between WebSocket messages and raw bytes
+            let (mut write, mut read) = ws_stream.split();
+            
+            // Spawn task to read WebSocket messages and convert to bytes
+            async_rt::task::spawn(async move {
+                while let Some(msg_result) = read.next().await {
+                    if let Ok(Message::Binary(data)) = msg_result {
+                        if tx_ws.unbounded_send(data).is_err() {
+                            break;
+                        }
+                    } else if let Ok(Message::Close(_)) = msg_result {
+                        break;
+                    }
+                }
+            });
+            
+            // Spawn task to write bytes as WebSocket messages
+            async_rt::task::spawn(async move {
+                while let Some(data) = rx_bytes.next().await {
+                    if write.send(Message::Binary(data)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        #[cfg(not(feature = "wss-transport"))]
+        {
+            return Err(crate::ZmqError::Other("WSS transport not enabled"));
+        }
+    } else {
+        let tcp_stream = TcpStream::connect((host.to_string().as_str(), port)).await?;
+        let (ws_stream, _) = async_tungstenite::tokio::client_async(&url, tcp_stream)
+            .await
+            .map_err(|_e| crate::ZmqError::Other("WebSocket connection failed"))?;
+        
+        // Create read and write halves that convert between WebSocket messages and raw bytes
+        let (mut write, mut read) = ws_stream.split();
+        
+        // Spawn task to read WebSocket messages and convert to bytes
+        async_rt::task::spawn(async move {
+            while let Some(msg_result) = read.next().await {
+                if let Ok(Message::Binary(data)) = msg_result {
+                    if tx_ws.unbounded_send(data).is_err() {
+                        break;
+                    }
+                } else if let Ok(Message::Close(_)) = msg_result {
                     break;
                 }
-            } else if let Ok(Message::Close(_)) = msg_result {
-                break;
             }
-        }
-    });
-    
-    // Spawn task to write bytes as WebSocket messages
-    async_rt::task::spawn(async move {
-        while let Some(data) = rx_bytes.next().await {
-            if write.send(Message::Binary(data)).await.is_err() {
-                break;
+        });
+        
+        // Spawn task to write bytes as WebSocket messages
+        async_rt::task::spawn(async move {
+            while let Some(data) = rx_bytes.next().await {
+                if write.send(Message::Binary(data)).await.is_err() {
+                    break;
+                }
             }
-        }
-    });
+        });
+    }
     
     // Create wrapper that implements AsyncRead/AsyncWrite using channels
     let wrapper = WebSocketChannelWrapper::new(rx_ws, tx_bytes);
@@ -78,45 +140,105 @@ pub(crate) async fn connect(host: &Host, port: Port) -> ZmqResult<(FramedIo, End
 }
 
 #[cfg(any(feature = "async-std-runtime", feature = "async-dispatcher-runtime"))]
-pub(crate) async fn connect(host: &Host, port: Port) -> ZmqResult<(FramedIo, Endpoint)> {
+pub(crate) async fn connect(host: &Host, port: Port, use_tls: bool) -> ZmqResult<(FramedIo, Endpoint)> {
     use async_std::net::TcpStream;
     
-    let url = format!("ws://{}:{}", host, port);
-    let tcp_stream = TcpStream::connect((host.to_string().as_str(), port)).await?;
-    let (ws_stream, _) = async_tungstenite::async_std::client_async(&url, tcp_stream)
-        .await
-        .map_err(|_e| crate::ZmqError::Other("WebSocket connection failed"))?;
+    let protocol = if use_tls { "wss" } else { "ws" };
+    let url = format!("{}://{}:{}", protocol, host, port);
     
-    let peer_endpoint = Endpoint::Ws(host.clone(), port);
-    
-    // Create read and write halves that convert between WebSocket messages and raw bytes
-    let (mut write, mut read) = ws_stream.split();
+    let peer_endpoint = if use_tls {
+        Endpoint::Wss(host.clone(), port)
+    } else {
+        Endpoint::Ws(host.clone(), port)
+    };
     
     // Create async channels for communication
     let (tx_bytes, mut rx_bytes) = futures::channel::mpsc::unbounded::<Vec<u8>>();
     let (tx_ws, rx_ws) = futures::channel::mpsc::unbounded::<Vec<u8>>();
     
-    // Spawn task to read WebSocket messages and convert to bytes
-    async_rt::task::spawn(async move {
-        while let Some(msg_result) = read.next().await {
-            if let Ok(Message::Binary(data)) = msg_result {
-                if tx_ws.unbounded_send(data).is_err() {
+    if use_tls {
+        #[cfg(feature = "wss-transport")]
+        {
+            use async_native_tls::TlsConnector;
+            
+            let tcp_stream = TcpStream::connect((host.to_string().as_str(), port)).await?;
+            let connector = TlsConnector::new()
+                .danger_accept_invalid_certs(true); // For self-signed certs - can be configurable
+            
+            let domain = match host {
+                Host::Domain(d) => d.as_str(),
+                _ => "localhost",
+            };
+            
+            let tls_stream = connector
+                .connect(domain, tcp_stream)
+                .await
+                .map_err(|_e| crate::ZmqError::Other("TLS connection failed"))?;
+            
+            let (ws_stream, _) = async_tungstenite::async_std::client_async(&url, tls_stream)
+                .await
+                .map_err(|_e| crate::ZmqError::Other("WebSocket connection failed"))?;
+            
+            // Create read and write halves that convert between WebSocket messages and raw bytes
+            let (mut write, mut read) = ws_stream.split();
+            
+            // Spawn task to read WebSocket messages and convert to bytes
+            async_rt::task::spawn(async move {
+                while let Some(msg_result) = read.next().await {
+                    if let Ok(Message::Binary(data)) = msg_result {
+                        if tx_ws.unbounded_send(data).is_err() {
+                            break;
+                        }
+                    } else if let Ok(Message::Close(_)) = msg_result {
+                        break;
+                    }
+                }
+            });
+            
+            // Spawn task to write bytes as WebSocket messages
+            async_rt::task::spawn(async move {
+                while let Some(data) = rx_bytes.next().await {
+                    if write.send(Message::Binary(data)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        #[cfg(not(feature = "wss-transport"))]
+        {
+            return Err(crate::ZmqError::Other("WSS transport not enabled"));
+        }
+    } else {
+        let tcp_stream = TcpStream::connect((host.to_string().as_str(), port)).await?;
+        let (ws_stream, _) = async_tungstenite::async_std::client_async(&url, tcp_stream)
+            .await
+            .map_err(|_e| crate::ZmqError::Other("WebSocket connection failed"))?;
+        
+        // Create read and write halves that convert between WebSocket messages and raw bytes
+        let (mut write, mut read) = ws_stream.split();
+        
+        // Spawn task to read WebSocket messages and convert to bytes
+        async_rt::task::spawn(async move {
+            while let Some(msg_result) = read.next().await {
+                if let Ok(Message::Binary(data)) = msg_result {
+                    if tx_ws.unbounded_send(data).is_err() {
+                        break;
+                    }
+                } else if let Ok(Message::Close(_)) = msg_result {
                     break;
                 }
-            } else if let Ok(Message::Close(_)) = msg_result {
-                break;
             }
-        }
-    });
-    
-    // Spawn task to write bytes as WebSocket messages
-    async_rt::task::spawn(async move {
-        while let Some(data) = rx_bytes.next().await {
-            if write.send(Message::Binary(data)).await.is_err() {
-                break;
+        });
+        
+        // Spawn task to write bytes as WebSocket messages
+        async_rt::task::spawn(async move {
+            while let Some(data) = rx_bytes.next().await {
+                if write.send(Message::Binary(data)).await.is_err() {
+                    break;
+                }
             }
-        }
-    });
+        });
+    }
     
     // Create wrapper that implements AsyncRead/AsyncWrite using channels
     let wrapper = WebSocketChannelWrapper::new(rx_ws, tx_bytes);
@@ -128,6 +250,7 @@ pub(crate) async fn connect(host: &Host, port: Port) -> ZmqResult<(FramedIo, End
 pub(crate) async fn begin_accept<T>(
     host: Host,
     port: Port,
+    use_tls: bool,
     cback: impl Fn(ZmqResult<(FramedIo, Endpoint)>) -> T + Send + 'static,
 ) -> ZmqResult<(Endpoint, AcceptStopHandle)>
 where
@@ -135,9 +258,19 @@ where
 {
     use tokio::net::TcpListener;
     
+    if use_tls {
+        return Err(crate::ZmqError::Other(
+            "WSS server support requires certificate configuration (not yet implemented)"
+        ));
+    }
+    
     let listener = TcpListener::bind((host.to_string().as_str(), port)).await?;
     let resolved_addr = listener.local_addr()?;
-    let resolved_endpoint = Endpoint::Ws(resolved_addr.ip().into(), resolved_addr.port());
+    let resolved_endpoint = if use_tls {
+        Endpoint::Wss(resolved_addr.ip().into(), resolved_addr.port())
+    } else {
+        Endpoint::Ws(resolved_addr.ip().into(), resolved_addr.port())
+    };
     
     let (stop_channel, stop_callback) = futures::channel::oneshot::channel::<()>();
     
@@ -205,6 +338,7 @@ where
 pub(crate) async fn begin_accept<T>(
     host: Host,
     port: Port,
+    use_tls: bool,
     cback: impl Fn(ZmqResult<(FramedIo, Endpoint)>) -> T + Send + 'static,
 ) -> ZmqResult<(Endpoint, AcceptStopHandle)>
 where
@@ -212,9 +346,19 @@ where
 {
     use async_std::net::TcpListener;
     
+    if use_tls {
+        return Err(crate::ZmqError::Other(
+            "WSS server support requires certificate configuration (not yet implemented)"
+        ));
+    }
+    
     let listener = TcpListener::bind((host.to_string().as_str(), port)).await?;
     let resolved_addr = listener.local_addr()?;
-    let resolved_endpoint = Endpoint::Ws(resolved_addr.ip().into(), resolved_addr.port());
+    let resolved_endpoint = if use_tls {
+        Endpoint::Wss(resolved_addr.ip().into(), resolved_addr.port())
+    } else {
+        Endpoint::Ws(resolved_addr.ip().into(), resolved_addr.port())
+    };
     
     let (stop_channel, stop_callback) = futures::channel::oneshot::channel::<()>();
     

@@ -45,6 +45,7 @@ Features:
 - `ipc-transport`: Enable IPC as a transport mechanism
 - `tcp-transport`: Enable TCP as a transport mechanism
 - `ws-transport`: Enable WebSocket as a transport mechanism
+- `wss-transport`: Enable Secure WebSocket (WSS/TLS) as a transport mechanism
 
 ## Contributing
 

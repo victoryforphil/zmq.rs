@@ -38,6 +38,7 @@ pub enum Endpoint {
     Tcp(Host, Port),
     Ipc(Option<PathBuf>),
     Ws(Host, Port),
+    Wss(Host, Port),
 }
 
 impl Endpoint {
@@ -46,6 +47,7 @@ impl Endpoint {
             Self::Tcp(_, _) => Transport::Tcp,
             Self::Ipc(_) => Transport::Ipc,
             Self::Ws(_, _) => Transport::Ws,
+            Self::Wss(_, _) => Transport::Wss,
         }
     }
 
@@ -61,6 +63,11 @@ impl Endpoint {
     /// Creates an `Endpoint::Ws` from host and port
     pub fn from_ws_domain(addr: String, port: u16) -> Self {
         Endpoint::Ws(Host::Domain(addr), port)
+    }
+
+    /// Creates an `Endpoint::Wss` from host and port
+    pub fn from_wss_domain(addr: String, port: u16) -> Self {
+        Endpoint::Wss(Host::Domain(addr), port)
     }
 }
 
@@ -102,6 +109,10 @@ impl FromStr for Endpoint {
                 let (host, port) = extract_host_port(address)?;
                 Endpoint::Ws(host, port)
             }
+            Transport::Wss => {
+                let (host, port) = extract_host_port(address)?;
+                Endpoint::Wss(host, port)
+            }
         };
 
         Ok(endpoint)
@@ -125,6 +136,13 @@ impl fmt::Display for Endpoint {
                     write!(f, "ws://[{}]:{}", host, port)
                 } else {
                     write!(f, "ws://{}:{}", host, port)
+                }
+            }
+            Endpoint::Wss(host, port) => {
+                if let Host::Ipv6(_) = host {
+                    write!(f, "wss://[{}]:{}", host, port)
+                } else {
+                    write!(f, "wss://{}:{}", host, port)
                 }
             }
         }
@@ -223,6 +241,18 @@ mod tests {
             (
                 Endpoint::Ws(Host::Ipv6("::1".parse().unwrap()), 9001),
                 "ws://[::1]:9001",
+            ),
+            (
+                Endpoint::Wss(Host::Domain("localhost".to_string()), 8443),
+                "wss://localhost:8443",
+            ),
+            (
+                Endpoint::Wss(Host::Ipv4("127.0.0.1".parse().unwrap()), 9443),
+                "wss://127.0.0.1:9443",
+            ),
+            (
+                Endpoint::Wss(Host::Ipv6("::1".parse().unwrap()), 9444),
+                "wss://[::1]:9444",
             ),
         ]
     });

@@ -46,7 +46,10 @@ pub(crate) async fn connect(endpoint: &Endpoint) -> ZmqResult<(FramedIo, Endpoin
             panic!("IPC transport is not available on this platform")
         }
         Endpoint::Ws(_host, _port) => {
-            do_if_enabled!("ws-transport", ws::connect(_host, *_port).await)
+            do_if_enabled!("ws-transport", ws::connect(_host, *_port, false).await)
+        }
+        Endpoint::Wss(_host, _port) => {
+            do_if_enabled!("wss-transport", ws::connect(_host, *_port, true).await)
         }
     }
 }
@@ -92,7 +95,10 @@ where
             panic!("IPC transport is not available on this platform")
         }
         Endpoint::Ws(_host, _port) => {
-            do_if_enabled!("ws-transport", ws::begin_accept(_host, _port, _cback).await)
+            do_if_enabled!("ws-transport", ws::begin_accept(_host, _port, false, _cback).await)
+        }
+        Endpoint::Wss(_host, _port) => {
+            do_if_enabled!("wss-transport", ws::begin_accept(_host, _port, true, _cback).await)
         }
     }
 }

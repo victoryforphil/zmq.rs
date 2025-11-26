@@ -13,6 +13,8 @@ pub enum Transport {
     Ipc,
     /// WebSocket transport
     Ws,
+    /// Secure WebSocket transport (WSS)
+    Wss,
 }
 
 impl Transport {
@@ -21,6 +23,7 @@ impl Transport {
             Transport::Tcp => "tcp",
             Transport::Ipc => "ipc",
             Transport::Ws => "ws",
+            Transport::Wss => "wss",
         }
     }
 }
@@ -33,6 +36,7 @@ impl FromStr for Transport {
             "tcp" => Transport::Tcp,
             "ipc" => Transport::Ipc,
             "ws" => Transport::Ws,
+            "wss" => Transport::Wss,
             _ => return Err(EndpointError::UnknownTransport(s.to_string())),
         };
         Ok(result)
