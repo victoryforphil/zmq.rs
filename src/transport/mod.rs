@@ -2,6 +2,8 @@
 mod ipc;
 #[cfg(feature = "tcp-transport")]
 mod tcp;
+#[cfg(feature = "ws-transport")]
+mod ws;
 
 use crate::codec::FramedIo;
 use crate::endpoint::Endpoint;
@@ -42,6 +44,12 @@ pub(crate) async fn connect(endpoint: &Endpoint) -> ZmqResult<(FramedIo, Endpoin
             }
             #[cfg(not(all(feature = "ipc-transport", target_family = "unix")))]
             panic!("IPC transport is not available on this platform")
+        }
+        Endpoint::Ws(_host, _port) => {
+            do_if_enabled!("ws-transport", ws::connect(_host, *_port, false).await)
+        }
+        Endpoint::Wss(_host, _port) => {
+            do_if_enabled!("wss-transport", ws::connect(_host, *_port, true).await)
         }
     }
 }
@@ -85,6 +93,12 @@ where
             }
             #[cfg(not(all(feature = "ipc-transport", target_family = "unix")))]
             panic!("IPC transport is not available on this platform")
+        }
+        Endpoint::Ws(_host, _port) => {
+            do_if_enabled!("ws-transport", ws::begin_accept(_host, _port, false, _cback).await)
+        }
+        Endpoint::Wss(_host, _port) => {
+            do_if_enabled!("wss-transport", ws::begin_accept(_host, _port, true, _cback).await)
         }
     }
 }
