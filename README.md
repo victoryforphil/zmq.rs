@@ -44,6 +44,7 @@ Features:
 - (default) `all-transport`: Enable all the `*-transport` flags
 - `ipc-transport`: Enable IPC as a transport mechanism
 - `tcp-transport`: Enable TCP as a transport mechanism
+- `ws-transport`: Enable WebSocket as a transport mechanism
 
 ## Contributing
 

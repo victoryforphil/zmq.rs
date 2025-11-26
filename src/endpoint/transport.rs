@@ -11,6 +11,8 @@ pub enum Transport {
     /// TCP transport
     Tcp,
     Ipc,
+    /// WebSocket transport
+    Ws,
 }
 
 impl Transport {
@@ -18,6 +20,7 @@ impl Transport {
         match self {
             Transport::Tcp => "tcp",
             Transport::Ipc => "ipc",
+            Transport::Ws => "ws",
         }
     }
 }
@@ -29,6 +32,7 @@ impl FromStr for Transport {
         let result = match s {
             "tcp" => Transport::Tcp,
             "ipc" => Transport::Ipc,
+            "ws" => Transport::Ws,
             _ => return Err(EndpointError::UnknownTransport(s.to_string())),
         };
         Ok(result)
