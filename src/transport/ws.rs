@@ -6,7 +6,29 @@ use crate::task_handle::TaskHandle;
 use crate::ZmqResult;
 
 use async_tungstenite::tungstenite::Message;
-use futures::{select, FutureExt, SinkExt, Stream, StreamExt};
+use futures::{select, FutureExt, SinkExt, StreamExt};
+
+// Common channel-based wrapper structure
+struct WebSocketChannelWrapper {
+    read_channel: futures::channel::mpsc::UnboundedReceiver<Vec<u8>>,
+    write_channel: futures::channel::mpsc::UnboundedSender<Vec<u8>>,
+    read_buffer: Vec<u8>,
+    read_pos: usize,
+}
+
+impl WebSocketChannelWrapper {
+    fn new(
+        read_channel: futures::channel::mpsc::UnboundedReceiver<Vec<u8>>,
+        write_channel: futures::channel::mpsc::UnboundedSender<Vec<u8>>,
+    ) -> Self {
+        Self {
+            read_channel,
+            write_channel,
+            read_buffer: Vec::new(),
+            read_pos: 0,
+        }
+    }
+}
 
 #[cfg(feature = "tokio-runtime")]
 pub(crate) async fn connect(host: &Host, port: Port) -> ZmqResult<(FramedIo, Endpoint)> {
@@ -256,30 +278,7 @@ where
     ))
 }
 
-// Channel-based wrapper that implements AsyncRead/AsyncWrite
-#[cfg(feature = "tokio-runtime")]
-struct WebSocketChannelWrapper {
-    read_channel: futures::channel::mpsc::UnboundedReceiver<Vec<u8>>,
-    write_channel: futures::channel::mpsc::UnboundedSender<Vec<u8>>,
-    read_buffer: Vec<u8>,
-    read_pos: usize,
-}
-
-#[cfg(feature = "tokio-runtime")]
-impl WebSocketChannelWrapper {
-    fn new(
-        read_channel: futures::channel::mpsc::UnboundedReceiver<Vec<u8>>,
-        write_channel: futures::channel::mpsc::UnboundedSender<Vec<u8>>,
-    ) -> Self {
-        Self {
-            read_channel,
-            write_channel,
-            read_buffer: Vec::new(),
-            read_pos: 0,
-        }
-    }
-}
-
+// Tokio-specific AsyncRead/AsyncWrite implementation
 #[cfg(feature = "tokio-runtime")]
 impl tokio::io::AsyncRead for WebSocketChannelWrapper {
     fn poll_read(
@@ -356,29 +355,7 @@ impl tokio::io::AsyncWrite for WebSocketChannelWrapper {
     }
 }
 
-#[cfg(any(feature = "async-std-runtime", feature = "async-dispatcher-runtime"))]
-struct WebSocketChannelWrapper {
-    read_channel: futures::channel::mpsc::UnboundedReceiver<Vec<u8>>,
-    write_channel: futures::channel::mpsc::UnboundedSender<Vec<u8>>,
-    read_buffer: Vec<u8>,
-    read_pos: usize,
-}
-
-#[cfg(any(feature = "async-std-runtime", feature = "async-dispatcher-runtime"))]
-impl WebSocketChannelWrapper {
-    fn new(
-        read_channel: futures::channel::mpsc::UnboundedReceiver<Vec<u8>>,
-        write_channel: futures::channel::mpsc::UnboundedSender<Vec<u8>>,
-    ) -> Self {
-        Self {
-            read_channel,
-            write_channel,
-            read_buffer: Vec::new(),
-            read_pos: 0,
-        }
-    }
-}
-
+// async-std-specific AsyncRead/AsyncWrite implementation
 #[cfg(any(feature = "async-std-runtime", feature = "async-dispatcher-runtime"))]
 impl futures::AsyncRead for WebSocketChannelWrapper {
     fn poll_read(
@@ -454,4 +431,5 @@ impl futures::AsyncWrite for WebSocketChannelWrapper {
         std::task::Poll::Ready(Ok(()))
     }
 }
+
 
